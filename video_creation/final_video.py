@@ -191,7 +191,6 @@ def make_final_video(
     reddit_obj: dict,
     background_config: Dict[str, Tuple],
 ):
-    """Creates the final video with only the thumbnail overlay."""
     # settings values
     W: Final[int] = int(settings.config["settings"]["resolution_w"])
     H: Final[int] = int(settings.config["settings"]["resolution_h"])
@@ -210,7 +209,9 @@ def make_final_video(
     # Gather all audio clips
     audio_clips = list()
     if number_of_clips == 0 and settings.config["settings"]["storymode"] == "false":
-        print("No audio clips to gather. Please use a different TTS or post.")
+        print(
+            "No audio clips to gather. Please use a different TTS or post."
+        )
         exit()
     if settings.config["settings"]["storymode"]:
         if settings.config["settings"]["storymodemethod"] == 0:
@@ -248,7 +249,11 @@ def make_final_video(
     thumbnail.save(f"assets/temp/{reddit_id}/thumbnail.png")
 
     # Overlay thumbnail on background for the first 5 seconds
-    thumbnail_overlay = ffmpeg.input(f"assets/temp/{reddit_id}/thumbnail.png")
+    thumbnail_overlay = (
+    ffmpeg
+    .input(f"assets/temp/{reddit_id}/thumbnail.png")
+    .filter('scale', width='iw*0.6', height='ih*0.6')  # Scale down to 60% of original size
+    )
     background_clip = background_clip.overlay(
         thumbnail_overlay, 
         x="(W-w)/2", 
@@ -256,15 +261,31 @@ def make_final_video(
         enable='between(t,0,5)'
     )
 
-    # Create a thumbnail for the video (if enabled)
+    title = re.sub(r"[^\w\s-]", "", reddit_obj["thread_title"])
+    idx = re.sub(r"[^\w\s-]", "", reddit_obj["thread_id"])
+    title_thumb = reddit_obj["thread_title"]
+
+    filename = f"{name_normalize(title)[:251]}"
+    subreddit = settings.config["reddit"]["thread"]["subreddit"]
+
+    if not exists(f"./results/{subreddit}"):
+        print_substep("The 'results' folder could not be found so it was automatically created.")
+        os.makedirs(f"./results/{subreddit}")
+
+    if not exists(f"./results/{subreddit}/OnlyTTS") and allowOnlyTTSFolder:
+        print_substep("The 'OnlyTTS' folder could not be found so it was automatically created.")
+        os.makedirs(f"./results/{subreddit}/OnlyTTS")
+
+    # create a thumbnail for the video
     settingsbackground = settings.config["settings"]["background"]
+
     if settingsbackground["background_thumbnail"]:
         if not exists(f"./results/{subreddit}/thumbnails"):
             print_substep(
                 "The 'results/thumbnails' folder could not be found so it was automatically created."
             )
-            os.makedirs(f"./results/{reddit_obj['subreddit']}/thumbnails")
-        
+            os.makedirs(f"./results/{subreddit}/thumbnails")
+        # get the first file with the .png extension from assets/backgrounds and use it as a background for the thumbnail
         first_image = next(
             (file for file in os.listdir("assets/backgrounds") if file.endswith(".png")),
             None,
@@ -284,11 +305,21 @@ def make_final_video(
                 font_color,
                 width,
                 height,
-                reddit_obj["thread_title"],
+                title_thumb,
             )
             thumbnailSave.save(f"./assets/temp/{reddit_id}/thumbnail.png")
             print_substep(f"Thumbnail - Building Thumbnail in assets/temp/{reddit_id}/thumbnail.png")
 
+    text = f"Background by {background_config['video'][2]}"
+    background_clip = ffmpeg.drawtext(
+        background_clip,
+        text=text,
+        x=f"(w-text_w)",
+        y=f"(h-text_h)",
+        fontsize=5,
+        fontcolor="White",
+        fontfile=os.path.join("fonts", "Roboto-Regular.ttf"),
+    )
     background_clip = background_clip.filter("scale", W, H)
     print_step("Rendering the video 🎥")
     from tqdm import tqdm
@@ -300,10 +331,12 @@ def make_final_video(
         old_percentage = pbar.n
         pbar.update(status - old_percentage)
 
-    subreddit = settings.config["reddit"]["thread"]["subreddit"]
     defaultPath = f"results/{subreddit}"
     with ProgressFfmpeg(length, on_update_example) as progress:
-        path = defaultPath + f"/{name_normalize(reddit_obj['thread_title'])[:251]}.mp4"
+        path = defaultPath + f"/{filename}"
+        path = (
+            path[:251] + ".mp4"
+        )  # Prevent a error by limiting the path length, do not change this.
         try:
             ffmpeg.output(
                 background_clip,
@@ -325,12 +358,13 @@ def make_final_video(
         except ffmpeg.Error as e:
             print(e.stderr.decode("utf8"))
             exit(1)
-    
     old_percentage = pbar.n
     pbar.update(100 - old_percentage)
-    
     if allowOnlyTTSFolder:
-        path = defaultPath + f"/OnlyTTS/{name_normalize(reddit_obj['thread_title'])[:251]}.mp4"
+        path = defaultPath + f"/OnlyTTS/{filename}"
+        path = (
+            path[:251] + ".mp4"
+        )  # Prevent a error by limiting the path length, do not change this.
         print_step("Rendering the Only TTS Video 🎥")
         with ProgressFfmpeg(length, on_update_example) as progress:
             try:
@@ -358,14 +392,7 @@ def make_final_video(
         old_percentage = pbar.n
         pbar.update(100 - old_percentage)
     pbar.close()
-    
-    save_data(
-        reddit_obj['subreddit'],
-        os.path.basename(path),
-        reddit_obj['thread_title'],
-        reddit_obj['thread_id'],
-        background_config["video"][2]
-    )
+    save_data(subreddit, filename + ".mp4", title, idx, background_config["video"][2])
     print_step("Removing temporary files 🗑")
     cleanups = cleanup(reddit_id)
     print_substep(f"Removed {cleanups} temporary files 🗑")
